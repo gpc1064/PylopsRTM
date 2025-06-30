@@ -1408,7 +1408,13 @@ class _ElasticWave(_Wave):
         return imf
 
     def rtm(self, recs: NDArray, **kwargs) -> NDArray:
-        return self._imaging_allshots(recs, **kwargs)
+        controller=kwargs.pop("mpi_controller", None)
+        image = self._imaging_allshots(recs, **kwargs)
+
+        if (controller):
+            return controller.build_image(image)
+        else:
+            return image
 
     def _grad_oneshot(self, isrc, dobs, solver: IsoElasticWaveSolver):
         """Adjoint gradient modelling for one shot
