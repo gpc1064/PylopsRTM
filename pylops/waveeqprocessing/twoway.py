@@ -1802,6 +1802,10 @@ class _ViscoAcousticWave(_Wave):
         src_y: NDArray = None,
         rec_y: NDArray = None,
         dt: int = None,
+        segy_path: str = None,
+        segy_mpi: MPIComm = None,
+        segy_sample: Union[int, float] = None,
+        mpi_instant_reduce: bool = False,
     ) -> None:
         if devito_message is not None:
             raise NotImplementedError(devito_message)
@@ -1829,6 +1833,34 @@ class _ViscoAcousticWave(_Wave):
         self.time_order = time_order
         self.karguments = {}
         self.op_name = op_name
+        
+        if (segy_path):
+            if is_3d:
+                raise Exception("3D segy reader not available yet")
+
+            nshots, shot_ids = count_segy_shots(segy_path)
+            nsy = 1  # 2D
+
+            sample = segy_sample or nshots
+            if sample <= 0 or sample > nshots:
+                raise Exception("segy sample must be between (0," + str(nshots) + "]")
+            elif sample >= 1:
+                # Straight number of samples
+                sample = int(sample)
+            else:
+                # Percentage
+                sample = int(nshots * sample)
+
+            idxs = np.linspace(0, nshots - 1, num=sample, dtype=int)
+            sampled_sids = [shot_ids[i] for i in idxs]
+
+            if segy_mpi:
+                controller = MPIShotsController(shape, sample, nsy, nbl, segy_mpi, shot_ids=sampled_sids)
+                self.mpi_controller = controller
+
+            self.segyReader = ReadSEGY2D(segy_path, mpi=getattr(self, "mpi_controller", None), shot_ids=sampled_sids)
+
+        self.instant_reduce = mpi_instant_reduce
 
         dims = self._compute_dims(vp.shape)
 
@@ -2086,7 +2118,12 @@ class _ViscoAcousticWave(_Wave):
             solver.geometry.src_positions = self.geometry.src_positions[isrc, :]
             grad = self._grad_oneshot(solver, isrc, dobs[isrc])
             mtot += self._crop_model(grad.data, self.model.nbl)
-        return mtot
+        
+        controller = getattr(self, "mpi_controller", None)
+        if (controller and self.instant_reduce):
+            return controller.build_result([mtot])[0]
+        else:
+            return mtot
 
     def _register_multiplications(self, op_name: str) -> None:
         if op_name == "fwd":
