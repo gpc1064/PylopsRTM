@@ -1,13 +1,47 @@
 import os
 import numpy as np
 from mpi4py import MPI
+from typing import List, Optional, Tuple, Union, Any
 
 __all__ = ["MPIShotsController"]
 
 
 class MPIShotsController:
-    def __init__(self, shape, nsx, nsy, nbl, comm, shot_ids=None):
-
+    """Controller for dividing and managing shots in an MPI environment.
+    
+    This class automates the distribution of seismic shots among MPI processes in
+    seismic processing applications, ensuring load balancing and providing utilities
+    for I/O operations and result combination.
+    
+    Attributes:
+        shape (Tuple[int, int, int]):Model dimensions (nx, ny, nz)
+        nsx (int):Number of shots in the x-direction
+        nsy (int):Number of shots in the y-direction
+        nbl (int): Thickness of the absorption boundary layer
+        comm: MPI communicator
+        size (int): Total number of MPI processes
+        rank (int): Rank of the current process
+        root (bool): True if the current process is rank 0
+        global_shot_ids (Optional[List]): SEGY executions. Array with all shot IDs
+        local_start (int): Starting index of local shots
+        local_end (int): Ending index of local shots
+        ns_local (int): Number of local shots
+        shot_ids (Optional[List]): SEGY executions. IDs of shots assigned to the current process
+    """
+    
+    def __init__(self, shape: Tuple[int, ...], nsx: int, nsy: int, nbl: int, 
+                 comm: MPI.Comm, shot_ids: Optional[List] = None) -> None:
+        """Initialize the MPI shots controller.
+        
+        Args:
+            shape: Seismic model dimensions
+            nsx: Number of shots in the x-direction
+            nsy: Number of shots in the y-direction
+            nbl: Thickness of the absorption boundary layer
+            comm: MPI communicator
+            shot_ids: Optional list of SEGY shot IDs
+        """
+        
         self.shape = shape
         self.nsx = nsx
         self.nsy = nsy
@@ -27,23 +61,43 @@ class MPIShotsController:
         else:
             self.shot_ids = None
 
-    def get_attr(self, name):
-        attr = getattr(self, name, None)
-
-        if not attr:
-            raise ValueError(f"Attribute {attr} does not exist or not yet initialized")
-
-        return attr
-
-    def _crop_stencil(self, m, nbl):
-        """Remove absorbing boundaries from model"""
+    def _crop_stencil(self, m: List[np.ndarray], nbl: int) -> List[np.ndarray]:
+        """
+        Remove absorption boundary layers from models.
+        
+        Args:
+            m: List of models/stencils to process
+            nbl: Thickness of the boundary layer to remove
+            
+        Returns:
+            List of cropped models without boundary layers
+        """
+        
         cropped_stencils = []
         for stencil in m:
             slices = tuple(slice(nbl, -nbl) for _ in range(stencil.ndim))
             cropped_stencils.append(stencil[slices])
         return cropped_stencils
 
-    def divide_sdomain(self, M=None, n=None, idx=None):
+    def divide_sdomain(self, M: Optional[int] = None, n: Optional[int] = None, 
+                       idx: Optional[int] = None) -> Tuple[int, int, int]:
+        """
+        Divide the shot domain among MPI processes using a balanced approach.
+        
+        This method implements a round-robin distribution that ensures optimal
+        load balancing by distributing any remainder shots to the first processes.
+        
+        Args:
+            M: Total number of points to divide (default: self.nsx * self.nsy)
+            n: Number of processes (default: self.size)
+            idx: Process rank (default: self.rank)
+            
+        Returns:
+            Tuple containing:
+                - start: Starting index for this process
+                - end: Ending index for this process
+                - ns_local: Number of shots assigned to this process
+        """
         points = M or (self.nsx * self.nsy)
         size = n or self.size
         rank = idx or self.rank
@@ -60,10 +114,23 @@ class MPIShotsController:
 
         return start, end, end - start
 
-    def divide_shots(self, dpf=.05, mode="centered_uniform"):
+    def divide_shots(self, spacing: Tuple[float, ...], dpf: float = .05, 
+                     mode: str = "centered_uniform") -> np.ndarray:
+        """
+        Calculate shot coordinates for local shots based on distribution mode.
+        
+        Args:
+            spacing: Grid spacing in each dimension (dx, dy, dz)
+            dpf: Depth percentage factor (default: 0.05 = 5% of total depth)
+            mode: Coordinates distribution mode 
+            
+        Returns:
+            Array of shot coordinates [x, y, z] for local shots
+        """
+        
         nsx = self.nsx
         nsy = self.nsy
-        nx, ny, nz = self.shape
+        nx, ny, nz = tuple(sh * sp for sh, sp in zip(self.shape, spacing))
         depth = int(dpf * nz)
 
         local_start, local_end, ns_local = self.divide_sdomain()
@@ -101,9 +168,24 @@ class MPIShotsController:
         self.ns_local = ns_local
         return np.array(local_sources)
 
-    def read_data(self, pwd, seismic_nt, mode="shot_number",
-                  recs_names=["recX", "recY", "recZ"]):
-
+    def read_data(self, pwd: str, seismic_nt: int, mode: str = "shot_number",
+                  recs_names: List[str] = ["recX", "recY", "recZ"]) -> List[List[np.ndarray]]:
+        """
+        Read seismic data from binary files for local shots.
+        
+        Args:
+            pwd: Path to the directory containing data files
+            seismic_nt: Number of time samples in seismic data
+            mode: Reading mode (currently only "shot_number" supported)
+            recs_names: List of receiver component names to read
+            
+        Returns:
+            Nested list of seismic data arrays organized by [component][shot]
+            
+        Note:
+            Files are expected to be named as {rec_name}_{sx}_{sy}.bin
+        """
+        
         lstart = self.local_start
         lend = self.local_end
         nsx = self.nsx
@@ -126,9 +208,21 @@ class MPIShotsController:
 
         return dims_recs
 
-    def write_data(self, recs_data, pwd, mode="shot_number",
-                   recs_names=["recX", "recY", "recZ"]):
-
+    def write_data(self, recs_data: List[List[np.ndarray]], pwd: str, 
+                   mode: str = "shot_number",
+                   recs_names: List[str] = ["recX", "recY", "recZ"]) -> None:
+        """
+        Write seismic data to binary files for local shots.
+        
+        Args:
+            recs_data: Nested list of seismic data arrays organized by [component][shot]
+            pwd: Path to the directory for output files
+            mode: Writing mode (currently only "shot_number" supported)
+            recs_names: List of receiver component names for file naming
+            
+        Note:
+            Files will be named as {rec_name}_{sx}_{sy}.bin
+        """
         lstart = self.local_start
         lend = self.local_end
         nsx = self.nsx
@@ -145,7 +239,16 @@ class MPIShotsController:
                 aux.close()
             shot += 1
 
-    def build_result(self, local_image):
+    def build_result(self, local_image: Union[List[np.ndarray], np.ndarray]) -> np.ndarray:
+        """
+        Combine local results from all processes using MPI Allreduce.
+        
+        Args:
+            local_image: Local image data to combine
+            
+        Returns:
+            Global combined image from all processes
+        """
         shape = self.shape
         comm = self.comm
 
