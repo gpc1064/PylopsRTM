@@ -130,6 +130,13 @@ class _ViscoAcousticWave(_Wave):
         segy_mpi: MPIComm = None,
         segy_sample: Union[int, float] = None,
         mpi_instant_reduce: bool = False,
+        dswap: bool = False,
+        dswap_disks: int = 1,
+        dswap_folder: str = None,
+        dswap_path: str = None,
+        dswap_compression: str = None,
+        dswap_compression_value: float | int = None,
+        dswap_verbose: bool = False,
     ) -> None:
         if devito_message is not None:
             raise NotImplementedError(devito_message)
@@ -157,7 +164,7 @@ class _ViscoAcousticWave(_Wave):
         self.time_order = time_order
         self.karguments = {}
         self.op_name = op_name
-        
+
         if (segy_path):
             if is_3d:
                 raise Exception("3D segy reader not available yet")
@@ -185,9 +192,19 @@ class _ViscoAcousticWave(_Wave):
             self.segyReader = ReadSEGY2D(segy_path, mpi=getattr(self, "mpi_controller", None), shot_ids=sampled_sids)
 
         self.instant_reduce = mpi_instant_reduce
-        
+
         dims = self._compute_dims(vp.shape)
 
+        self._dswap_opt = {
+            "dswap": dswap,
+            "dswap_disks": dswap_disks,
+            "dswap_folder": dswap_folder,
+            "dswap_path": dswap_path,
+            "dswap_compression": dswap_compression,
+            "dswap_compression_value": dswap_compression_value,
+            "dswap_verbose": dswap_verbose,
+        }
+        
         super().__init__(
             dtype=np.dtype(dtype),
             dims=dims,
@@ -313,6 +330,7 @@ class _ViscoAcousticWave(_Wave):
             space_order=self.space_order,
             kernel=self.kernel,
             time_order=self.time_order,
+            **self._dswap_opt
         )
 
         nsrc = self.geometry.src_positions.shape[0]
@@ -406,11 +424,13 @@ class _ViscoAcousticWave(_Wave):
         rec = self.geometry.rec.copy()
         rec.data[:] = dobs.T
 
+        dswap = self._dswap_opt.get("dswap", False)
+        
         # source wavefield
         if hasattr(self, "src_wavefield"):
             p = self.src_wavefield[isrc]
         else:
-            p = solver.forward(save=True)[1]
+            p = solver.forward(save=True if not dswap else False)[1]
 
         # adjoint modelling (reverse wavefield plus imaging condition)
         grad, _ = solver.jacobian_adjoint(rec, p)
@@ -435,6 +455,7 @@ class _ViscoAcousticWave(_Wave):
             space_order=self.space_order,
             kernel=self.kernel,
             time_order=self.time_order,
+            **self._dswap_opt
         )
 
         nsrc = self.geometry.src_positions.shape[0]
