@@ -103,6 +103,7 @@ class _AcousticWave(_Wave):
         segy_path: str = None,
         segy_mpi: MPIComm = None,
         segy_sample: Union[int, float] = None,
+        segy_fields: dict = {},
         mpi_instant_reduce: bool = False,
         dswap: bool = False,
         dswap_disks: int = 1,
@@ -165,6 +166,7 @@ class _AcousticWave(_Wave):
                 segy_path,
                 mpi=getattr(self, "mpi_controller", None),
                 shot_ids=sampled_sids,
+                segy_fields=segy_fields
             )
 
         self.instant_reduce = mpi_instant_reduce

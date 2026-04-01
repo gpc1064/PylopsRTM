@@ -129,6 +129,7 @@ class _ViscoAcousticWave(_Wave):
         segy_path: str = None,
         segy_mpi: MPIComm = None,
         segy_sample: Union[int, float] = None,
+        segy_fields: dict = {},
         mpi_instant_reduce: bool = False,
     ) -> None:
         if devito_message is not None:
@@ -184,7 +185,8 @@ class _ViscoAcousticWave(_Wave):
             self.segyReader = SegyReader(
                 segy_path,
                 mpi=getattr(self, "mpi_controller", None),
-                shot_ids=sampled_sids
+                shot_ids=sampled_sids,
+                segy_fields=segy_fields
             )
 
         self.instant_reduce = mpi_instant_reduce
