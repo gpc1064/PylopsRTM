@@ -110,11 +110,11 @@ class SegyDict(dict):
 
 class ReadSEGY2D():
 
-    def __init__(self, segy_path, mpi=None, shot_ids=None):
+    def __init__(self, segy_path, mpi=None, shot_ids=None, segy_fields={}):
 
         self.segyfile = segy_path
         self.controller = mpi
-        self.table, self.indexes = self.make_lookup_table(segy_path, mpi, shot_ids)
+        self.table, self.indexes = self.make_lookup_table(segy_path, mpi, shot_ids, segy_fields)
         self.isRecVariable = self._isRecVariable()
         self.nsrc = len(self.table)
 
@@ -130,7 +130,7 @@ class ReadSEGY2D():
         # If the lenght of the set is 1, means that all the shots has the same number os receivers
         return len(n_traces_per_shots) != 1
 
-    def make_lookup_table(self, sgy_file, mpi_controller, sampled_ids):
+    def make_lookup_table(self, sgy_file, mpi_controller, sampled_ids, segy_fields):
         '''
         Make a lookup of shots, where the keys are the shot record IDs being
         searched (looked up)
@@ -141,22 +141,23 @@ class ReadSEGY2D():
         lookup_table = {}
 
         samples = sampled_ids if not mpi_controller else mpi_controller.shot_ids
-
+        target_fields = SegyDict(input_dict=segy_fields)
+        
         with segyio.open(sgy_file, ignore_geometry=True) as f:
             index = None
             pos_in_file = 0
 
             for header in f.header:
-                index = header[segyio.TraceField.FieldRecord]
+                index = header[target_fields["shot_id"]]
 
                 if (samples and (index not in samples)):
                     pos_in_file += 1
                     continue
 
-                if int(header[segyio.TraceField.SourceGroupScalar]) < 0:
-                    scalco = abs(1. / header[segyio.TraceField.SourceGroupScalar])
+                if int(header[target_fields["scalco"]]) < 0:
+                    scalco = abs(1. / header[target_fields["scalco"]])
                 else:
-                    scalco = header[segyio.TraceField.SourceGroupScalar]
+                    scalco = header[target_fields["scalco"]]
                 # Esses comentários são temporários, scalel voltará a ser utilizado
                 # if int(header[segyio.TraceField.ElevationScalar]) < 0:
                 #     scalel = abs(1. / header[segyio.TraceField.ElevationScalar])
@@ -170,12 +171,14 @@ class ReadSEGY2D():
                     lookup_table[index]['filename'] = sgy_file
                     lookup_table[index]['Trace_Position'] = pos_in_file
                     lookup_table[index]['Num_Traces'] = 1
-                    lookup_table[index]['Source'] = (header[segyio.TraceField.SourceX] * scalco, header[segyio.TraceField.SourceY] * scalco)
+                    lookup_table[index]['Source'] = (header[target_fields["source_x"]] * scalco,
+                                                     header[target_fields["source_y"]] * scalco)
                     lookup_table[index]['Receivers'] = []
                     lookup_table[index]['scalcos'] = []
                 else:  # Not in a new shot, so increase the number of traces in the shot by 1
                     lookup_table[index]['Num_Traces'] += 1
-                lookup_table[index]['Receivers'].append((header[segyio.TraceField.GroupX] * scalco, header[segyio.TraceField.GroupY] * scalco))
+                lookup_table[index]['Receivers'].append((header[target_fields["rec_x"]] * scalco,
+                                                         header[target_fields["rec_y"]] * scalco))
                 lookup_table[index]['scalcos'].append(scalco)
                 pos_in_file += 1
 
@@ -286,7 +289,6 @@ class ReadSEGY3D():
         lookup_table = {}
 
         samples = sampled_ids if not mpi_controller else mpi_controller.shot_ids
-        
         target_fields = SegyDict(input_dict=segy_fields)
 
         with segyio.open(sgy_file, ignore_geometry=True) as f:
